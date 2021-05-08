@@ -1,14 +1,9 @@
-# summarize total emission by state
-# merging dataset, states, 
-# Color by emission
-
-
-
-#Loading library for data processing and plotting
+#Loading necessary library for data processing and plotting
 library(dplyr)
 library(ggplot2)
 library(grDevices)
 library(RColorBrewer)
+library(tigris)
 library(usmap)
 library(maps)
 
@@ -16,11 +11,12 @@ library(maps)
 SCC <- readRDS("Source_Classification_Code.rds")
 NEI <- readRDS("summarySCC_PM25.rds")
 row.names(NEI) <- seq(1:dim(NEI)[1])
-data("state.fips")
+data("fips_codes")
 
 #check missing value in NEI file:
 NEI <- NEI %>%
-    mutate(fips = gsub(" ","",fips)) 
+    mutate(fips = gsub(" ","",fips))
+
 NEI[NEI == "NA"] <- NA
 
 # Calculate how many missing values
@@ -35,11 +31,11 @@ Missing_SCC_Num <- dim(NEI)[1] - sum( NEI[,2] %in% unique_SCC)
 
 #0 SCC code is not in SCC code table.
 
+
+
 # Based on the documentation in this PDF file: https://ofmpub.epa.gov/sccwebservices/sccsearch/docs/SCC-IntroToSCCs_2021.pdf
 # We know that we can use SCC.level.1 to capture external and internal combustion;
 # We can also know that fuel being used in the combustion process is stored in level 3 or 4.
-
-
 # Due to the complexity involved in the SCC coding convention, I decided to simplify the assignment by
 # filtering string with key word "Coal". 
 
@@ -50,40 +46,49 @@ SCC_Code_list <- SCC %>%
 
 df_int <- NEI %>%
     filter(SCC %in% SCC_Code_list[,1]) %>%
-    mutate(fips_2 = as.numeric(substr(fips,1,2)))
+    mutate(fips_2 = (substr(fips,1,2)))
 
 
-sum(is.na(df_int$fips_2))
-# 15 data missing fips code, roughly 0.03%
-
-
-temp_state <- c()
-counter <- 1
-for (i in 1:nrow(state.fips)){
-    ind_target <- unlist(regexpr(":",state.fips$polyname[i]))
-    if(ind_target != -1){
-        temp_state[counter] <- substr(state.fips$polyname[i],1,ind_target[1]-1)
-        
-    }
-    else{
-        temp_state[counter] <- state.fips$polyname[i]
-    }
-    counter <- counter + 1
-}
-df_state <- unique(data.frame(state.fips$fips,temp_state))
+df_state <- data.frame(unique(fips_codes[c("state_code","state_name")]))
 names(df_state) <- c("fips","state_name")
 
 
+# Merge 2 dataset to transfer fips code into real states name 
+df_int <- merge(df_int,df_state, by.x = "fips_2",by.y = "fips",all.x = T)
 
-df_int <- merge(df_int,df_state, by.x = "fips_2",by.y = "fips")
 
-df_grouped <- group_by(df_int,fips)
-df_plot <- summarize(df_grouped,sum(Emissions))
+df_grouped <- group_by(df_int,state_name,year)
+df_plot <- data.frame(summarize(df_grouped,sum(Emissions)))
+df_plot[,1] <- tolower(df_plot[,1])
 
 
 # Start Plotting the Beautiful States!
 
 MainStates <- map_data("state")
+#plotting 1999 first
+
+#Preparation for multi-facet plot
+Merged.states <- left_join(MainStates,df_plot[df_plot$year==1999,],by = c("region" = "state_name"))
+for (years in c(2002,2005,2008)){
+    temp_states <- left_join(MainStates,df_plot[df_plot$year == years,],by = c("region" = "state_name"))
+    Merged.states <- rbind(Merged.states,temp_states)
+}
+#Eliminate NA value(Roughly XXX % of total data number)
+Merged.states <- filter(Merged.states,!is.na(year))
+
+state.lab <- MainStates %>%
+            group_by(region) %>%
+            summarise(long = mean(long),lat = mean(lat))
+
+
+png(filename = "plot4.png", width = 1444, height = 1080)
 
 ggplot()+
-    geom_polygon(data = MainStates,aes(x=long,y = lat,group = group),color="black", fill = "lightblue")
+    geom_polygon(data = Merged.states ,aes(x=long,y = lat, group = group,fill = sum.Emissions.),
+                 color="white", size = 0.2) +
+    scale_fill_viridis_c("Total PM2.5 Emission",option ="A")+
+    labs(title = "PM2.5 Emissions by State of different years")+
+    facet_wrap(.~year)+
+    geom_text(aes(label = region, x = long, y = lat), data = state.lab, size = 2, hjust = 0.5,color = "white")
+
+dev.off()
